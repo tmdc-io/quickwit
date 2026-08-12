@@ -108,3 +108,28 @@ build-rustdoc:
 .PHONY: build-ui
 build-ui:
 	$(MAKE) -C $(QUICKWIT_SRC) build-ui
+
+# TMDC Docker image (pushed to docker.io/tmdcio/quickwit on tagged releases).
+PLATFORM ?= linux/amd64
+DOCKER_BUILD_ARGS ?=
+GITHUB_TAGS ?= $(IMAGE_TAG)
+TMDC_IMAGE ?= docker.io/tmdcio/quickwit
+
+.PHONY: build-tmdc-docker
+build-tmdc-docker: ## Build Quickwit Docker image for TMDC.
+	@test -n "$(GITHUB_TAGS)" || (echo "GITHUB_TAGS is required" && exit 1)
+	@echo "Building $(TMDC_IMAGE):$(GITHUB_TAGS) for $(PLATFORM)"
+	docker buildx build \
+		--platform $(PLATFORM) \
+		--build-arg QW_COMMIT_DATE=$(QW_COMMIT_DATE) \
+		--build-arg QW_COMMIT_HASH=$(QW_COMMIT_HASH) \
+		--build-arg QW_COMMIT_TAGS=$(QW_COMMIT_TAGS) \
+		--tag $(TMDC_IMAGE):$(GITHUB_TAGS) \
+		--load \
+		$(DOCKER_BUILD_ARGS) \
+		.
+
+.PHONY: push-tmdc-docker
+push-tmdc-docker: ## Push TMDC Quickwit Docker image to Docker Hub.
+	@test -n "$(GITHUB_TAGS)" || (echo "GITHUB_TAGS is required" && exit 1)
+	docker push $(TMDC_IMAGE):$(GITHUB_TAGS)
