@@ -44,6 +44,8 @@ GitHub Codespaces provides a fully configured development environment in the clo
 ### Running tests
 Run `make test-all` to run all tests.
 
+TLS integration tests use certificates under `quickwit/resources/tests/tls/`. Private keys are gitignored and generated automatically: `make test-tls-certs` (also run as part of `make test-all`).
+
 ## Useful commands
 * `make test-all` - starts necessary Docker services and runs all tests.
 * `make -k test-all docker-compose-down` - the same as above, but tears down the Docker services after running all the tests.

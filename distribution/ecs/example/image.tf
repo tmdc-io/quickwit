@@ -11,10 +11,13 @@ locals {
 resource "aws_ecr_repository" "quickwit" {
   count                = var.dockerhub_pull_through_creds_secret_arn == "" ? 0 : 1
   name                 = "${local.ecr_repository_prefix}/quickwit/quickwit"
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
   force_delete         = true
+  encryption_configuration {
+    encryption_type = "AES256"
+  }
   image_scanning_configuration {
-    scan_on_push = false
+    scan_on_push = true
   }
 }
 

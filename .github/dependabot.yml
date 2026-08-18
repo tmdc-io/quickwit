@@ -40,13 +40,22 @@ updates:
 
   # NPM dependencies
   - package-ecosystem: npm
-    directory: "/"
+    directory: "/quickwit/quickwit-ui"
     schedule:
       interval: "monthly"
     groups:
       npm-dependencies:
         patterns:
           - "*"
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 2
+
+  # Python dependencies (REST API integration tests)
+  - package-ecosystem: pip
+    directory: "/quickwit/rest-api-tests"
+    schedule:
+      interval: "monthly"
     open-pull-requests-limit: 10
     cooldown:
       default-days: 2

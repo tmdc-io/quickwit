@@ -16,8 +16,12 @@ RUN apt-get -y update \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
+RUN groupadd --system quickwit \
+    && useradd --system --gid quickwit --home-dir /quickwit --shell /usr/sbin/nologin quickwit
+
 WORKDIR /quickwit
-RUN mkdir config qwdata
+RUN mkdir config qwdata \
+    && chown -R quickwit:quickwit /quickwit
 COPY --from=builder /quickwit-v*/quickwit /usr/local/bin/quickwit
 COPY --from=builder /quickwit-v*/config/quickwit.yaml /quickwit/config/quickwit.yaml
 
@@ -26,5 +30,10 @@ ENV QW_DATA_DIR=/quickwit/qwdata
 ENV QW_LISTEN_ADDRESS=0.0.0.0
 
 RUN quickwit --version
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD quickwit --version || exit 1
+
+USER quickwit
 
 ENTRYPOINT ["quickwit"]

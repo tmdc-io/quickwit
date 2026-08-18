@@ -111,9 +111,10 @@ export function QueryEditor(props: SearchComponentProps) {
   }, [monacoRef, props.runSearch]);
 
   function handleEditorChange(value: any) {
-    const updatedSearchRequest = Object.assign({}, props.searchRequest, {
+    const updatedSearchRequest = {
+      ...props.searchRequest,
       query: value,
-    });
+    };
     searchRequestRef.current = updatedSearchRequest;
     props.onSearchRequestUpdate(updatedSearchRequest);
   }

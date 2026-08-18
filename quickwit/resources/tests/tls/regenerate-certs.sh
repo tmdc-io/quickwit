@@ -3,7 +3,11 @@
 # this script regenerate cryptographic material used in tests. These are valid for 10y, but better
 # keep how to regenerate them than get stuck with failing tests eventually
 
-rm ca.{crt,key,srl} server.{csr,key,v3.ext,crt} server2.{csr,key,crt}
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+rm -f ca.{crt,key,srl} server.{csr,key,v3.ext,crt} server2.{csr,key,crt}
 openssl genrsa -out ca.key 4096
 openssl req -x509 -new -nodes -key ca.key -sha256 -days 3653 -out ca.crt -subj '/CN=qw test CA'
 openssl req -new -nodes -out server.csr -newkey rsa:4096 -keyout server.key -subj '/CN=qw test certificate'

@@ -83,6 +83,7 @@ module "quickwit_service" {
   subnet_ids = var.subnet_ids
   security_group_rules = {
     ingress_internal = {
+      description = "Quickwit REST/gRPC/gossip from cluster members"
       type      = "ingress"
       from_port = 7280
       to_port   = 7281
@@ -91,6 +92,7 @@ module "quickwit_service" {
       source_security_group_id = var.quickwit_cluster_member_sg_id
     }
     ingress_external = {
+      description = "Quickwit REST/gRPC from allowed CIDR blocks"
       type      = "ingress"
       from_port = 7280
       to_port   = 7281
@@ -99,6 +101,7 @@ module "quickwit_service" {
       cidr_blocks = var.ingress_cidr_blocks
     }
     egress_all = {
+      description = "Allow outbound traffic for AWS APIs and external services"
       type      = "egress"
       from_port = 0
       to_port   = 0

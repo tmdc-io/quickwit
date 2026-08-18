@@ -28,6 +28,58 @@ resource "aws_s3_bucket" "file_source" {
   force_destroy = true
 }
 
+resource "aws_s3_bucket_public_access_block" "file_source" {
+  bucket = aws_s3_bucket.file_source.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_versioning" "file_source" {
+  bucket = aws_s3_bucket.file_source.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "file_source" {
+  bucket = aws_s3_bucket.file_source.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "file_source_deny_insecure_transport" {
+  bucket = aws_s3_bucket.file_source.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          aws_s3_bucket.file_source.arn,
+          "${aws_s3_bucket.file_source.arn}/*",
+        ]
+        Condition = {
+          Bool = {
+            "aws:SecureTransport" = "false"
+          }
+        }
+      },
+    ]
+  })
+}
+
 data "aws_iam_policy_document" "sqs_notification" {
   statement {
     effect = "Allow"
@@ -53,6 +105,8 @@ resource "aws_sqs_queue" "s3_events" {
   name   = local.sqs_notification_queue_name
   policy = data.aws_iam_policy_document.sqs_notification.json
 
+  sqs_managed_sse_enabled = true
+
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.s3_events_deadletter.arn
     maxReceiveCount     = 5
@@ -60,7 +114,8 @@ resource "aws_sqs_queue" "s3_events" {
 }
 
 resource "aws_sqs_queue" "s3_events_deadletter" {
-  name = "${locals.sqs_notification_queue_name}-deadletter"
+  name                    = "${local.sqs_notification_queue_name}-deadletter"
+  sqs_managed_sse_enabled = true
 }
 
 resource "aws_sqs_queue_redrive_allow_policy" "s3_events_deadletter" {
@@ -99,15 +154,22 @@ data "aws_iam_policy_document" "quickwit_node" {
   }
 }
 
+data "aws_caller_identity" "current" {}
+
+resource "aws_iam_policy" "quickwit_node" {
+  name   = "quickwit-filesource-tutorial"
+  path   = "/system/"
+  policy = data.aws_iam_policy_document.quickwit_node.json
+}
+
 resource "aws_iam_user" "quickwit_node" {
   name = "quickwit-filesource-tutorial"
   path = "/system/"
 }
 
-resource "aws_iam_user_policy" "quickwit_node" {
-  name   = "quickwit-filesource-tutorial"
-  user   = aws_iam_user.quickwit_node.name
-  policy = data.aws_iam_policy_document.quickwit_node.json
+resource "aws_iam_user_policy_attachment" "quickwit_node" {
+  user       = aws_iam_user.quickwit_node.name
+  policy_arn = aws_iam_policy.quickwit_node.arn
 }
 
 resource "aws_iam_access_key" "quickwit_node" {

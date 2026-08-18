@@ -6,6 +6,7 @@ name = "pypi"
 [packages]
 requests = "*"
 pyaml = "*"
+idna = ">=3.15"
 
 [dev-packages]
 

@@ -38,7 +38,10 @@ unused-deps:
 # Usage:
 # `make test-all` starts the Docker services and runs all the tests.
 # `make -k test-all docker-compose-down`, tears down the Docker services after running all the tests.
-test-all:
+test-tls-certs:
+	@cd resources/tests/tls && bash regenerate-certs.sh
+
+test-all: test-tls-certs
 	AWS_ACCESS_KEY_ID=ignored \
 	AWS_SECRET_ACCESS_KEY=ignored \
 	AWS_REGION=us-east-1 \

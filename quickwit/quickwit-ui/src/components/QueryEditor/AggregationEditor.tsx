@@ -127,10 +127,12 @@ export function AggregationKind(props: SearchComponentProps) {
       aggregationConfig.histogram === null &&
       aggregationConfig.term === null
     ) {
-      const initialAggregation = Object.assign({}, ...aggregations);
       const initialSearchRequest = {
         ...props.searchRequest,
-        aggregationConfig: initialAggregation,
+        aggregationConfig: {
+          ...props.searchRequest.aggregationConfig,
+          ...aggregations[0],
+        },
       };
       props.onSearchRequestUpdate(initialSearchRequest);
     }
@@ -139,11 +141,11 @@ export function AggregationKind(props: SearchComponentProps) {
   useEffect(() => {
     // Update search request whenever aggregations change
     const metric = props.searchRequest.aggregationConfig.metric;
-    const updatedAggregation = Object.assign(
-      {},
-      { metric: metric },
-      ...aggregations,
-    );
+    const updatedAggregation = {
+      ...props.searchRequest.aggregationConfig,
+      metric: metric,
+      ...aggregations.reduce((acc, agg) => ({ ...acc, ...agg }), {}),
+    };
     const updatedSearchRequest = {
       ...props.searchRequest,
       aggregationConfig: updatedAggregation,

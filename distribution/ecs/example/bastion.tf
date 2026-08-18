@@ -30,6 +30,7 @@ resource "aws_security_group" "allow_ssh" {
   vpc_id      = module.vpc.vpc_id
 
   ingress {
+    description = "SSH access to bastion host"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
@@ -37,6 +38,7 @@ resource "aws_security_group" "allow_ssh" {
   }
 
   egress {
+    description = "Allow all outbound traffic"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -52,6 +54,12 @@ resource "aws_instance" "bastion" {
   subnet_id                   = module.vpc.public_subnets[0]
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.allow_ssh[0].id]
+
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
 
   tags = {
     Name = "quickwit-ecs-bastion"
