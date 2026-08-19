@@ -51,7 +51,7 @@ RUN echo "Building workspace with feature(s) '$CARGO_FEATURES' and profile '$CAR
     && find target/$CARGO_PROFILE -maxdepth 1 -perm /a+x -type f -exec mv {} /quickwit/bin \;
 
 
-FROM debian:bookworm-slim@sha256:e899040a73d36e2b36fa33216943539d9957cba8172b858097c2cabcdb20a3e2 AS quickwit
+FROM tmdcio/debian:13-slim-fips-curated.v1@sha256:056db8a66a9308fa93257b746031f9e374dd261c84c0c495028e8a7aa317f309 AS quickwit
 
 LABEL org.opencontainers.image.title="Quickwit"
 LABEL maintainer="Quickwit, Inc. <hello@quickwit.io>"
