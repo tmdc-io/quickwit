@@ -183,7 +183,42 @@ impl AzureBlobStorage {
         let storage_credentials = if let Some(access_key) =
             azure_storage_config.resolve_access_key()
         {
+            // irsa_enabled=disabled: shared key in node.yaml
             StorageCredentials::access_key(storage_account_name.clone(), access_key)
+        } else if std::env::var("AZURE_FEDERATED_TOKEN_FILE")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .is_some()
+        {
+            // irsa_enabled=enabled on AKS: Workload Identity federated token.
+            // Must run before the AZURE_CLIENT_ID IMDS branch — WI also sets
+            // AZURE_CLIENT_ID, and IMDS cannot use a pod federated identity.
+            let credential = Arc::new(
+                crate::object_storage::azure_workload_identity_credential::WorkloadIdentityCredential::from_env()
+                    .map_err(|err| {
+                        StorageResolverError::InvalidConfig(format!(
+                            "Azure Workload Identity credential is not available: {err}"
+                        ))
+                    })?,
+            );
+            StorageCredentials::token_credential(credential)
+        } else if let Ok(client_id) = std::env::var("AZURE_CLIENT_ID") {
+            // Prefer user-assigned MI when AZURE_CLIENT_ID is set. azure_identity
+            // 0.21's create_credential()/VM credential always uses system-assigned
+            // IMDS and ignores AZURE_CLIENT_ID, which fails on AKS (UAMI-only nodes).
+            if client_id.is_empty() {
+                return Err(StorageResolverError::InvalidConfig(
+                    "AZURE_CLIENT_ID is set but empty; provide the user-assigned managed \
+                     identity client id or a storage account access key"
+                        .to_string(),
+                ));
+            }
+            let credential = Arc::new(
+                crate::object_storage::azure_user_assigned_credential::UserAssignedManagedIdentityCredential::new(
+                    client_id,
+                ),
+            );
+            StorageCredentials::token_credential(credential)
         } else if let Ok(credential) = azure_identity::create_credential() {
             StorageCredentials::token_credential(credential)
         } else {
