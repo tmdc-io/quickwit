@@ -208,8 +208,8 @@ impl AzureBlobStorage {
             // IMDS and ignores AZURE_CLIENT_ID, which fails on AKS (UAMI-only nodes).
             if client_id.is_empty() {
                 return Err(StorageResolverError::InvalidConfig(
-                    "AZURE_CLIENT_ID is set but empty; provide the user-assigned managed \
-                     identity client id or a storage account access key"
+                    "AZURE_CLIENT_ID is set but empty; provide the user-assigned managed identity \
+                     client id or a storage account access key"
                         .to_string(),
                 ));
             }

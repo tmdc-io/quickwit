@@ -25,7 +25,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use azure_core::auth::{AccessToken, Secret, TokenCredential};
 use azure_core::error::{Error, ErrorKind};
-use azure_core::{from_json, HttpClient, Method, Request, Url};
+use azure_core::{HttpClient, Method, Request, Url, from_json};
 use azure_identity::TokenCredentialOptions;
 use bytes::Bytes;
 use serde::Deserialize;
@@ -99,7 +99,8 @@ impl WorkloadIdentityCredential {
         })?;
 
         let body = format!(
-            "client_id={}&scope={}&grant_type=client_credentials&client_assertion_type={}&client_assertion={}",
+            "client_id={}&scope={}&grant_type=client_credentials&client_assertion_type={}&\
+             client_assertion={}",
             percent_encode(&self.client_id),
             percent_encode(scope),
             percent_encode(CLIENT_ASSERTION_TYPE),
@@ -115,12 +116,10 @@ impl WorkloadIdentityCredential {
         let rsp_body = rsp_body.collect().await?;
 
         if !rsp_status.is_success() {
-            return Err(ErrorKind::http_response_from_parts(
-                rsp_status,
-                &rsp_headers,
-                &rsp_body,
-            )
-            .into_error());
+            return Err(
+                ErrorKind::http_response_from_parts(rsp_status, &rsp_headers, &rsp_body)
+                    .into_error(),
+            );
         }
 
         let token_response: EntraTokenResponse = from_json(&rsp_body)?;
@@ -178,9 +177,7 @@ struct EntraTokenResponse {
 }
 
 fn expires_on_opt<'de, D>(deserializer: D) -> Result<Option<OffsetDateTime>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
+where D: serde::Deserializer<'de> {
     let raw = Option::<serde_json::Value>::deserialize(deserializer)?;
     let Some(raw) = raw else {
         return Ok(None);
@@ -190,8 +187,5 @@ where
         serde_json::Value::String(s) => s.parse::<i64>().ok(),
         _ => None,
     };
-    ts.and_then(|v| OffsetDateTime::from_unix_timestamp(v).ok())
-        .map(Some)
-        .ok_or_else(|| serde::de::Error::custom("invalid expires_on"))
-        .or(Ok(None))
+    Ok(ts.and_then(|v| OffsetDateTime::from_unix_timestamp(v).ok()))
 }

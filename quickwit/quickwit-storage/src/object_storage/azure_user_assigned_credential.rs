@@ -27,7 +27,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use azure_core::auth::{AccessToken, Secret, TokenCredential};
 use azure_core::error::{Error, ErrorKind};
-use azure_core::{from_json, HttpClient, Method, Request, StatusCode, Url};
+use azure_core::{HttpClient, Method, Request, StatusCode, Url, from_json};
 use azure_identity::TokenCredentialOptions;
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -75,12 +75,10 @@ impl UserAssignedManagedIdentityCredential {
                     ErrorKind::Credential,
                     "the request failed due to a gateway error",
                 )),
-                status => Err(ErrorKind::http_response_from_parts(
-                    status,
-                    &rsp_headers,
-                    &rsp_body,
-                )
-                .into_error()),
+                status => Err(
+                    ErrorKind::http_response_from_parts(status, &rsp_headers, &rsp_body)
+                        .into_error(),
+                ),
             };
         }
 
@@ -127,9 +125,7 @@ struct MsiTokenResponse {
 }
 
 fn expires_on_string<'de, D>(deserializer: D) -> Result<OffsetDateTime, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
+where D: serde::Deserializer<'de> {
     let v = String::deserialize(deserializer).map_err(serde::de::Error::custom)?;
     let as_i64 = v.parse::<i64>().map_err(serde::de::Error::custom)?;
     OffsetDateTime::from_unix_timestamp(as_i64).map_err(serde::de::Error::custom)
