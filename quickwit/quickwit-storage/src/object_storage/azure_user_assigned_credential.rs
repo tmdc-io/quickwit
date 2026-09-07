@@ -19,8 +19,9 @@
 //! AKS node pools typically only have user-assigned identities (kubelet UAMI),
 //! so `create_credential()` fails at token time with Unauthorized.
 //!
-//! This credential calls IMDS with an explicit `client_id`, matching how
-//! Thanos / the Azure Go SDK honor `AZURE_CLIENT_ID`.
+//! This credential calls IMDS with an explicit `client_id`, caches the token
+//! (refresh 5 minutes before expiry), retries transient IMDS failures, and
+//! honors `clear_cache` on blob 401 — the same shape as Thanos / azidentity.
 
 use std::sync::Arc;
 
@@ -32,6 +33,8 @@ use azure_identity::TokenCredentialOptions;
 use serde::Deserialize;
 use time::OffsetDateTime;
 
+use super::azure_token_cache::{TokenCache, fetch_token_with_retries};
+
 const IMDS_ENDPOINT: &str = "http://169.254.169.254/metadata/identity/oauth2/token";
 const IMDS_API_VERSION: &str = "2019-08-01";
 
@@ -39,6 +42,7 @@ const IMDS_API_VERSION: &str = "2019-08-01";
 pub(crate) struct UserAssignedManagedIdentityCredential {
     client_id: String,
     http_client: Arc<dyn HttpClient>,
+    cache: TokenCache,
 }
 
 impl UserAssignedManagedIdentityCredential {
@@ -47,6 +51,7 @@ impl UserAssignedManagedIdentityCredential {
         Self {
             client_id,
             http_client: options.http_client(),
+            cache: TokenCache::new(),
         }
     }
 
@@ -93,11 +98,16 @@ impl UserAssignedManagedIdentityCredential {
 #[async_trait]
 impl TokenCredential for UserAssignedManagedIdentityCredential {
     async fn get_token(&self, scopes: &[&str]) -> azure_core::Result<AccessToken> {
-        self.fetch_token(scopes).await
+        self.cache
+            .get_token(
+                scopes,
+                fetch_token_with_retries(|| self.fetch_token(scopes)),
+            )
+            .await
     }
 
     async fn clear_cache(&self) -> azure_core::Result<()> {
-        Ok(())
+        self.cache.clear().await
     }
 }
 

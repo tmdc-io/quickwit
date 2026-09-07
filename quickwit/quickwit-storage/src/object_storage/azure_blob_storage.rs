@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::num::NonZeroU32;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ use std::sync::{Arc, LazyLock};
 use std::{fmt, io};
 
 use async_trait::async_trait;
+use azure_core::auth::TokenCredential;
 use azure_core::error::ErrorKind;
 use azure_core::{Pageable, StatusCode};
 use azure_storage::prelude::*;
@@ -84,6 +86,9 @@ pub struct AzureBlobStorage {
     prefix: PathBuf,
     multipart_policy: MultiPartPolicy,
     retry_params: RetryParams,
+    /// Token credential used for IMDS / WI. On blob 401 we `clear_cache` then
+    /// retry, matching Thanos / azidentity.
+    token_credential: Option<Arc<dyn TokenCredential>>,
 }
 
 impl fmt::Debug for AzureBlobStorage {
@@ -125,7 +130,13 @@ impl AzureBlobStorage {
                 max_concurrent_uploads: 100,
             },
             retry_params: RetryParams::aggressive(),
+            token_credential: None,
         }
+    }
+
+    fn with_token_credential(mut self, credential: Arc<dyn TokenCredential>) -> Self {
+        self.token_credential = Some(credential);
+        self
     }
 
     /// Sets the prefix path.
@@ -138,6 +149,7 @@ impl AzureBlobStorage {
             prefix,
             multipart_policy: self.multipart_policy,
             retry_params: self.retry_params,
+            token_credential: self.token_credential,
         }
     }
 
@@ -155,6 +167,7 @@ impl AzureBlobStorage {
             prefix: PathBuf::new(),
             multipart_policy: MultiPartPolicy::default(),
             retry_params: RetryParams::no_retries(),
+            token_credential: None,
         }
     }
 
@@ -180,6 +193,7 @@ impl AzureBlobStorage {
                 );
                 StorageResolverError::InvalidConfig(message)
             })?;
+        let mut token_credential: Option<Arc<dyn TokenCredential>> = None;
         let storage_credentials = if let Some(access_key) =
             azure_storage_config.resolve_access_key()
         {
@@ -193,7 +207,7 @@ impl AzureBlobStorage {
             // irsa_enabled=enabled on AKS: Workload Identity federated token.
             // Must run before the AZURE_CLIENT_ID IMDS branch — WI also sets
             // AZURE_CLIENT_ID, and IMDS cannot use a pod federated identity.
-            let credential = Arc::new(
+            let credential: Arc<dyn TokenCredential> = Arc::new(
                 crate::object_storage::azure_workload_identity_credential::WorkloadIdentityCredential::from_env()
                     .map_err(|err| {
                         StorageResolverError::InvalidConfig(format!(
@@ -201,6 +215,7 @@ impl AzureBlobStorage {
                         ))
                     })?,
             );
+            token_credential = Some(credential.clone());
             StorageCredentials::token_credential(credential)
         } else if let Ok(client_id) = std::env::var("AZURE_CLIENT_ID") {
             // Prefer user-assigned MI when AZURE_CLIENT_ID is set. azure_identity
@@ -213,13 +228,15 @@ impl AzureBlobStorage {
                         .to_string(),
                 ));
             }
-            let credential = Arc::new(
+            let credential: Arc<dyn TokenCredential> = Arc::new(
                 crate::object_storage::azure_user_assigned_credential::UserAssignedManagedIdentityCredential::new(
                     client_id,
                 ),
             );
+            token_credential = Some(credential.clone());
             StorageCredentials::token_credential(credential)
         } else if let Ok(credential) = azure_identity::create_credential() {
+            token_credential = Some(credential.clone());
             StorageCredentials::token_credential(credential)
         } else {
             return Err(StorageResolverError::InvalidConfig(
@@ -233,14 +250,18 @@ impl AzureBlobStorage {
             StorageResolverError::InvalidUri(message)
         })?;
         let blob_service_uri = azure_storage_config.resolve_blob_service_uri(&storage_account_name);
-        let azure_blob_storage = AzureBlobStorage::new(
+        let mut azure_blob_storage = AzureBlobStorage::new(
             storage_account_name,
             storage_credentials,
             blob_service_uri,
             uri.clone(),
             container_name,
-        );
-        Ok(azure_blob_storage.with_prefix(prefix))
+        )
+        .with_prefix(prefix);
+        if let Some(credential) = token_credential {
+            azure_blob_storage = azure_blob_storage.with_token_credential(credential);
+        }
+        Ok(azure_blob_storage)
     }
 
     /// Returns the blob name (a.k.a blob key).
@@ -257,7 +278,7 @@ impl AzureBlobStorage {
     ) -> StorageResult<Bytes> {
         let name = self.blob_name(path);
         let capacity = range_opt.as_ref().map(Range::len).unwrap_or(0);
-        retry(&self.retry_params, || async {
+        retry_azure(&self.retry_params, self.token_credential.clone(), || async {
             let _timer = HistogramTimer::new(&crate::metrics::OBJECT_STORAGE_GET_OBJECT_DURATION);
             let (mut response_stream, _in_flight_guards) = if let Some(range) = range_opt.as_ref() {
                 let stream = self
@@ -289,7 +310,7 @@ impl AzureBlobStorage {
         crate::metrics::OBJECT_STORAGE_PUT_PARTS.inc();
         crate::metrics::OBJECT_STORAGE_UPLOAD_NUM_BYTES.inc_by(payload.len());
         let _timer = HistogramTimer::new(&crate::metrics::OBJECT_STORAGE_PUT_OBJECT_DURATION);
-        retry(&self.retry_params, || async {
+        retry_azure(&self.retry_params, self.token_credential.clone(), || async {
             let data = Bytes::from(payload.read_all().await?.to_vec());
             let hash = azure_storage_blobs::prelude::Hash::from(md5::compute(&data[..]).0);
             self.container_client
@@ -317,16 +338,19 @@ impl AzureBlobStorage {
             chunk_range(0..total_len as usize, part_len as usize).map(into_u64_range);
 
         let blob_client = self.container_client.blob_client(name);
+        let retry_params = self.retry_params;
+        let token_credential = self.token_credential.clone();
         let upload_blocks_stream = tokio_stream::iter(multipart_ranges.enumerate())
             .map(|(num, range)| {
                 let moved_blob_client = blob_client.clone();
                 let moved_payload = payload.clone();
+                let token_credential = token_credential.clone();
                 crate::metrics::OBJECT_STORAGE_PUT_PARTS.inc();
                 crate::metrics::OBJECT_STORAGE_UPLOAD_NUM_BYTES.inc_by(range.end - range.start);
                 async move {
                     let _timer =
                         HistogramTimer::new(&crate::metrics::OBJECT_STORAGE_UPLOAD_PART_DURATION);
-                    retry(&self.retry_params, || async {
+                    retry_azure(&retry_params, token_credential, || async {
                         // zero pad block ids to make them sortable as strings
                         let block_id = format!("block:{:05}", num);
                         let (data, hash_digest) =
@@ -511,7 +535,7 @@ impl Storage for AzureBlobStorage {
         path: &Path,
         range: Range<usize>,
     ) -> StorageResult<Box<dyn AsyncRead + Send + Unpin>> {
-        retry(&self.retry_params, || async {
+        retry_azure(&self.retry_params, self.token_credential.clone(), || async {
             let range = range.clone();
             let name = self.blob_name(path);
             let page_stream = self
@@ -673,10 +697,52 @@ fn coalesce_segments(mut segments: Vec<Bytes>, total_num_bytes: usize) -> Bytes 
     }
 }
 
+async fn retry_azure<T, F, Fut>(
+    retry_params: &RetryParams,
+    token_credential: Option<Arc<dyn TokenCredential>>,
+    f: F,
+) -> Result<T, AzureErrorWrapper>
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<T, AzureErrorWrapper>>,
+{
+    retry(retry_params, || {
+        let token_credential = token_credential.clone();
+        let fut = f();
+        async move {
+            let result = fut.await;
+            if let Err(ref err) = result {
+                if err.is_auth_failure() {
+                    if let Some(cred) = token_credential {
+                        if let Err(clear_err) = cred.clear_cache().await {
+                            warn!(
+                                error = ?clear_err,
+                                "failed to clear Azure token cache after auth error"
+                            );
+                        }
+                    }
+                }
+            }
+            result
+        }
+    })
+    .await
+}
+
 #[derive(Error, Debug)]
 #[error("Azure error wrapper(inner={inner})")]
 struct AzureErrorWrapper {
     inner: AzureError,
+}
+
+impl AzureErrorWrapper {
+    fn is_auth_failure(&self) -> bool {
+        match self.inner.kind() {
+            ErrorKind::HttpResponse { status, .. } => *status == StatusCode::Unauthorized,
+            ErrorKind::Credential => true,
+            _ => false,
+        }
+    }
 }
 
 impl Retryable for AzureErrorWrapper {
@@ -685,11 +751,12 @@ impl Retryable for AzureErrorWrapper {
             ErrorKind::HttpResponse { status, .. } => !matches!(
                 status,
                 StatusCode::NotFound
-                    | StatusCode::Unauthorized
                     | StatusCode::BadRequest
                     | StatusCode::Forbidden
             ),
             ErrorKind::Io => true,
+            // IMDS / token fetch failed: retry after clear_cache (Thanos / azidentity).
+            ErrorKind::Credential => true,
             _ => false,
         }
     }

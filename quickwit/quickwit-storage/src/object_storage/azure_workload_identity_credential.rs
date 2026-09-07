@@ -31,6 +31,8 @@ use bytes::Bytes;
 use serde::Deserialize;
 use time::{Duration, OffsetDateTime};
 
+use super::azure_token_cache::{TokenCache, fetch_token_with_retries};
+
 const CLIENT_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 const DEFAULT_AUTHORITY_HOST: &str = "https://login.microsoftonline.com/";
 
@@ -41,6 +43,7 @@ pub(crate) struct WorkloadIdentityCredential {
     token_file: String,
     authority_host: String,
     http_client: Arc<dyn HttpClient>,
+    cache: TokenCache,
 }
 
 impl WorkloadIdentityCredential {
@@ -59,6 +62,7 @@ impl WorkloadIdentityCredential {
             token_file,
             authority_host,
             http_client: options.http_client(),
+            cache: TokenCache::new(),
         })
     }
 
@@ -133,11 +137,16 @@ impl WorkloadIdentityCredential {
 #[async_trait]
 impl TokenCredential for WorkloadIdentityCredential {
     async fn get_token(&self, scopes: &[&str]) -> azure_core::Result<AccessToken> {
-        self.fetch_token(scopes).await
+        self.cache
+            .get_token(
+                scopes,
+                fetch_token_with_retries(|| self.fetch_token(scopes)),
+            )
+            .await
     }
 
     async fn clear_cache(&self) -> azure_core::Result<()> {
-        Ok(())
+        self.cache.clear().await
     }
 }
 
