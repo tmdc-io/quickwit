@@ -1,4 +1,4 @@
-FROM node:24@sha256:b2b2184ba9b78c022e1d6a7924ec6fba577adf28f15c9d9c457730cc4ad3807a AS ui-builder
+FROM node:24@sha256:6449e19d8184d84062525b6a7524def03146c2cb04a7f08b076680d0e8e4240a AS ui-builder
 
 COPY quickwit/quickwit-ui /quickwit/quickwit-ui
 
@@ -8,7 +8,7 @@ RUN touch .gitignore_for_build_directory \
     && NODE_ENV=production make install build
 
 
-FROM rust:bookworm@sha256:b5efaabfd787a695d2e46b37d3d9c54040e11f4c10bc2e714bbadbfcc0cd6c39 AS bin-builder
+FROM rust:bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS bin-builder
 
 ARG CARGO_FEATURES=release-feature-set
 ARG CARGO_PROFILE=release
@@ -23,7 +23,9 @@ ENV QW_COMMIT_TAGS=$QW_COMMIT_TAGS
 ENV LAMBDA_ZIP_PATH=$LAMBDA_ZIP_PATH
 
 RUN apt-get -y update \
-    && apt-get -y install ca-certificates \
+    && apt-get -y upgrade \
+    && apt-get -y install --no-install-recommends \
+    ca-certificates \
     clang \
     cmake \
     libssl-dev \
@@ -51,7 +53,7 @@ RUN echo "Building workspace with feature(s) '$CARGO_FEATURES' and profile '$CAR
     && find target/$CARGO_PROFILE -maxdepth 1 -perm /a+x -type f -exec mv {} /quickwit/bin \;
 
 
-FROM debian:bookworm-slim@sha256:e899040a73d36e2b36fa33216943539d9957cba8172b858097c2cabcdb20a3e2 AS quickwit
+FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS quickwit
 
 LABEL org.opencontainers.image.title="Quickwit"
 LABEL maintainer="Quickwit, Inc. <hello@quickwit.io>"
@@ -59,7 +61,9 @@ LABEL org.opencontainers.image.vendor="Quickwit, Inc."
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 RUN apt-get -y update \
-    && apt-get -y install ca-certificates \
+    && apt-get -y upgrade \
+    && apt-get -y install --no-install-recommends \
+    ca-certificates \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 

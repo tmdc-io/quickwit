@@ -1,10 +1,13 @@
-FROM ubuntu:noble@sha256:66460d557b25769b102175144d538d88219c077c678a49af4afca6fbfc1b5252 AS builder
+FROM ubuntu:noble@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac AS builder
 
-RUN apt-get update && apt-get install -y curl
+RUN apt-get update \
+    && apt-get -y upgrade \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 RUN curl -L https://raw.githubusercontent.com/quickwit-oss/quickwit/main/install.sh | sh
 
 
-FROM ubuntu:noble@sha256:66460d557b25769b102175144d538d88219c077c678a49af4afca6fbfc1b5252 AS quickwit
+FROM ubuntu:noble@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac AS quickwit
 
 LABEL org.opencontainers.image.title="Quickwit"
 LABEL maintainer="Quickwit, Inc. <hello@quickwit.io>"
@@ -12,7 +15,9 @@ LABEL org.opencontainers.image.vendor="Quickwit, Inc."
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 RUN apt-get -y update \
-    && apt-get -y install ca-certificates \
+    && apt-get -y upgrade \
+    && apt-get -y install --no-install-recommends \
+    ca-certificates \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
