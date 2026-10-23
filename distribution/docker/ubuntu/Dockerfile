@@ -30,6 +30,11 @@ ENV QW_CONFIG=/quickwit/config/quickwit.yaml
 ENV QW_DATA_DIR=/quickwit/qwdata
 ENV QW_LISTEN_ADDRESS=0.0.0.0
 
-RUN quickwit --version
+RUN quickwit --version \
+    && groupadd --system quickwit \
+    && useradd --system --gid quickwit --home-dir /quickwit --shell /usr/sbin/nologin quickwit \
+    && chown -R quickwit:quickwit /quickwit
+
+USER quickwit
 
 ENTRYPOINT ["quickwit"]

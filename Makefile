@@ -133,3 +133,11 @@ build-tmdc-docker: ## Build Quickwit Docker image for TMDC.
 push-tmdc-docker: ## Push TMDC Quickwit Docker image to Docker Hub.
 	@test -n "$(GITHUB_TAGS)" || (echo "GITHUB_TAGS is required" && exit 1)
 	docker push $(TMDC_IMAGE):$(GITHUB_TAGS)
+
+# Vulnerability scan (wiz + trivy + grype). Set GITHUB_TAGS to the local image tag.
+WIZ_SCAN_SCRIPT ?= $(HOME)/wiz-scan.sh
+.PHONY: scan-vulnerabilities
+scan-vulnerabilities: ## Scan repo dir and $(TMDC_IMAGE):$(GITHUB_TAGS) for CVEs.
+	@test -n "$(GITHUB_TAGS)" || (echo "GITHUB_TAGS is required" && exit 1)
+	@test -x "$(WIZ_SCAN_SCRIPT)" || (echo "WIZ_SCAN_SCRIPT not found: $(WIZ_SCAN_SCRIPT)" && exit 1)
+	$(WIZ_SCAN_SCRIPT) --ignore-local-changes --scanners dir,trivy,grype $(TMDC_IMAGE):$(GITHUB_TAGS)
