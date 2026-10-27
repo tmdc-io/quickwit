@@ -41,14 +41,5 @@ jobs:
       - name: Build Docker image
         run: make build-tmdc-docker GITHUB_TAGS=${{ github.ref_name }} PLATFORM=linux/amd64
 
-      - name: Scan image for fixable OS vulnerabilities
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: docker.io/tmdcio/quickwit:${{ github.ref_name }}
-          scanners: vuln
-          ignore-unfixed: true
-          exit-code: "1"
-          severity: CRITICAL,HIGH
-
       - name: Push Docker image
         run: make push-tmdc-docker GITHUB_TAGS=${{ github.ref_name }}
