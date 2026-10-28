@@ -1,10 +1,13 @@
-FROM ubuntu:noble@sha256:66460d557b25769b102175144d538d88219c077c678a49af4afca6fbfc1b5252 AS builder
+FROM ubuntu:noble@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c AS builder
 
-RUN apt-get update && apt-get install -y curl
+RUN apt-get update \
+    && apt-get -y upgrade \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 RUN curl -L https://raw.githubusercontent.com/quickwit-oss/quickwit/main/install.sh | sh
 
 
-FROM ubuntu:noble@sha256:66460d557b25769b102175144d538d88219c077c678a49af4afca6fbfc1b5252 AS quickwit
+FROM ubuntu:noble@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c AS quickwit
 
 LABEL org.opencontainers.image.title="Quickwit"
 LABEL maintainer="Quickwit, Inc. <hello@quickwit.io>"
@@ -12,7 +15,9 @@ LABEL org.opencontainers.image.vendor="Quickwit, Inc."
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 RUN apt-get -y update \
-    && apt-get -y install ca-certificates \
+    && apt-get -y upgrade \
+    && apt-get -y install --no-install-recommends \
+    ca-certificates \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -25,6 +30,11 @@ ENV QW_CONFIG=/quickwit/config/quickwit.yaml
 ENV QW_DATA_DIR=/quickwit/qwdata
 ENV QW_LISTEN_ADDRESS=0.0.0.0
 
-RUN quickwit --version
+RUN quickwit --version \
+    && groupadd --system quickwit \
+    && useradd --system --gid quickwit --home-dir /quickwit --shell /usr/sbin/nologin quickwit \
+    && chown -R quickwit:quickwit /quickwit
+
+USER quickwit
 
 ENTRYPOINT ["quickwit"]

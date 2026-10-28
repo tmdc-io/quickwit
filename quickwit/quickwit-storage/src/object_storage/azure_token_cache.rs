@@ -22,9 +22,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration as StdDuration;
 
+use azure_core::StatusCode;
 use azure_core::auth::AccessToken;
 use azure_core::error::{Error, ErrorKind};
-use azure_core::StatusCode;
 use futures::Future;
 use time::{Duration, OffsetDateTime};
 use tokio::sync::RwLock;
@@ -108,7 +108,9 @@ pub(crate) fn is_transient_token_fetch_error(err: &Error) -> bool {
     }
 }
 
-pub(crate) async fn fetch_token_with_retries<F, Fut>(mut fetch: F) -> azure_core::Result<AccessToken>
+pub(crate) async fn fetch_token_with_retries<F, Fut>(
+    mut fetch: F,
+) -> azure_core::Result<AccessToken>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = azure_core::Result<AccessToken>>,
@@ -117,7 +119,8 @@ where
     for attempt in 1..=TOKEN_FETCH_MAX_ATTEMPTS {
         match fetch().await {
             Ok(token) => return Ok(token),
-            Err(err) if is_transient_token_fetch_error(&err) && attempt < TOKEN_FETCH_MAX_ATTEMPTS =>
+            Err(err)
+                if is_transient_token_fetch_error(&err) && attempt < TOKEN_FETCH_MAX_ATTEMPTS =>
             {
                 let delay = StdDuration::from_millis(200 * 2u64.pow(attempt - 1));
                 tracing::warn!(
@@ -137,10 +140,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use azure_core::auth::Secret;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use azure_core::auth::Secret;
+
+    use super::*;
 
     #[tokio::test]
     async fn cache_returns_same_token_until_skew() {

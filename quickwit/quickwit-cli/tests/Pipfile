@@ -5,6 +5,7 @@ name = "pypi"
 
 [packages]
 awscli-local = "*"
+urllib3 = ">=2.8.0"
 
 [dev-packages]
 
