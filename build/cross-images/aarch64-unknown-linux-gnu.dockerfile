@@ -15,6 +15,7 @@ ARG PBC_URL="https://github.com/protocolbuffers/protobuf/releases/download/v21.5
 # librdkafka 2.12.1 includes curl/curl.h even when OIDC support is disabled.
 RUN dpkg --add-architecture arm64 && \
     apt-get update && \
+    apt-get -y upgrade && \
     apt-get install -y --no-install-recommends \
         binutils-aarch64-linux-gnu \
         g++-10-aarch64-linux-gnu \

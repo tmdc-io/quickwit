@@ -252,7 +252,7 @@ reqwest-middleware = "0.4"
 reqwest-retry = "0.8"
 rust-embed = "8.11"
 rustc-hash = "2.1"
-rustls = "0.23"
+rustls = "0.23.46"
 rustls-pemfile = "2.2"
 sea-query = { version = "0.32" }
 sea-query-binder = { version = "0.7", features = [

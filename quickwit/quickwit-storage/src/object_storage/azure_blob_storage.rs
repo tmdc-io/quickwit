@@ -278,25 +278,31 @@ impl AzureBlobStorage {
     ) -> StorageResult<Bytes> {
         let name = self.blob_name(path);
         let capacity = range_opt.as_ref().map(Range::len).unwrap_or(0);
-        retry_azure(&self.retry_params, self.token_credential.clone(), || async {
-            let _timer = HistogramTimer::new(&crate::metrics::OBJECT_STORAGE_GET_OBJECT_DURATION);
-            let (mut response_stream, _in_flight_guards) = if let Some(range) = range_opt.as_ref() {
-                let stream = self
-                    .container_client
-                    .blob_client(&name)
-                    .get()
-                    .range(range.clone())
-                    .into_stream();
-                // only record ranged get request as being in flight
-                let in_flight_guards = object_storage_get_slice_in_flight_guards(capacity);
-                (stream, Some(in_flight_guards))
-            } else {
-                let stream = self.container_client.blob_client(&name).get().into_stream();
-                (stream, None)
-            };
-            let bytes = download_all(&mut response_stream).await?;
-            Result::<_, AzureErrorWrapper>::Ok(bytes)
-        })
+        retry_azure(
+            &self.retry_params,
+            self.token_credential.clone(),
+            || async {
+                let _timer =
+                    HistogramTimer::new(&crate::metrics::OBJECT_STORAGE_GET_OBJECT_DURATION);
+                let (mut response_stream, _in_flight_guards) =
+                    if let Some(range) = range_opt.as_ref() {
+                        let stream = self
+                            .container_client
+                            .blob_client(&name)
+                            .get()
+                            .range(range.clone())
+                            .into_stream();
+                        // only record ranged get request as being in flight
+                        let in_flight_guards = object_storage_get_slice_in_flight_guards(capacity);
+                        (stream, Some(in_flight_guards))
+                    } else {
+                        let stream = self.container_client.blob_client(&name).get().into_stream();
+                        (stream, None)
+                    };
+                let bytes = download_all(&mut response_stream).await?;
+                Result::<_, AzureErrorWrapper>::Ok(bytes)
+            },
+        )
         .await
         .map_err(StorageError::from)
     }
@@ -310,17 +316,21 @@ impl AzureBlobStorage {
         crate::metrics::OBJECT_STORAGE_PUT_PARTS.inc();
         crate::metrics::OBJECT_STORAGE_UPLOAD_NUM_BYTES.inc_by(payload.len());
         let _timer = HistogramTimer::new(&crate::metrics::OBJECT_STORAGE_PUT_OBJECT_DURATION);
-        retry_azure(&self.retry_params, self.token_credential.clone(), || async {
-            let data = Bytes::from(payload.read_all().await?.to_vec());
-            let hash = azure_storage_blobs::prelude::Hash::from(md5::compute(&data[..]).0);
-            self.container_client
-                .blob_client(name)
-                .put_block_blob(data)
-                .hash(hash)
-                .into_future()
-                .await?;
-            Result::<(), AzureErrorWrapper>::Ok(())
-        })
+        retry_azure(
+            &self.retry_params,
+            self.token_credential.clone(),
+            || async {
+                let data = Bytes::from(payload.read_all().await?.to_vec());
+                let hash = azure_storage_blobs::prelude::Hash::from(md5::compute(&data[..]).0);
+                self.container_client
+                    .blob_client(name)
+                    .put_block_blob(data)
+                    .hash(hash)
+                    .into_future()
+                    .await?;
+                Result::<(), AzureErrorWrapper>::Ok(())
+            },
+        )
         .await?;
         Ok(())
     }
@@ -535,31 +545,36 @@ impl Storage for AzureBlobStorage {
         path: &Path,
         range: Range<usize>,
     ) -> StorageResult<Box<dyn AsyncRead + Send + Unpin>> {
-        retry_azure(&self.retry_params, self.token_credential.clone(), || async {
-            let range = range.clone();
-            let name = self.blob_name(path);
-            let page_stream = self
-                .container_client
-                .blob_client(name)
-                .get()
-                .range(range)
-                .into_stream();
-            let mut bytes_stream = page_stream
-                .map(|page_res| page_res.map(|page| page.data).map_err(FutureError::other))
-                .try_flatten()
-                .map(|bytes_res| bytes_res.map_err(FutureError::other));
-            // Peek into the stream so that any early error can be retried
-            let first_chunk = bytes_stream.next().await;
-            let reader: Box<dyn AsyncRead + Send + Unpin> = if let Some(res) = first_chunk {
-                let first_chunk = res.map_err(AzureErrorWrapper::from)?;
-                let reconstructed_stream =
-                    Box::pin(futures::stream::once(async { Ok(first_chunk) }).chain(bytes_stream));
-                Box::new(StreamReader::new(reconstructed_stream))
-            } else {
-                Box::new(tokio::io::empty())
-            };
-            Result::<Box<dyn AsyncRead + Send + Unpin>, AzureErrorWrapper>::Ok(reader)
-        })
+        retry_azure(
+            &self.retry_params,
+            self.token_credential.clone(),
+            || async {
+                let range = range.clone();
+                let name = self.blob_name(path);
+                let page_stream = self
+                    .container_client
+                    .blob_client(name)
+                    .get()
+                    .range(range)
+                    .into_stream();
+                let mut bytes_stream = page_stream
+                    .map(|page_res| page_res.map(|page| page.data).map_err(FutureError::other))
+                    .try_flatten()
+                    .map(|bytes_res| bytes_res.map_err(FutureError::other));
+                // Peek into the stream so that any early error can be retried
+                let first_chunk = bytes_stream.next().await;
+                let reader: Box<dyn AsyncRead + Send + Unpin> = if let Some(res) = first_chunk {
+                    let first_chunk = res.map_err(AzureErrorWrapper::from)?;
+                    let reconstructed_stream = Box::pin(
+                        futures::stream::once(async { Ok(first_chunk) }).chain(bytes_stream),
+                    );
+                    Box::new(StreamReader::new(reconstructed_stream))
+                } else {
+                    Box::new(tokio::io::empty())
+                };
+                Result::<Box<dyn AsyncRead + Send + Unpin>, AzureErrorWrapper>::Ok(reader)
+            },
+        )
         .await
         .map_err(|e| e.into())
     }
@@ -750,9 +765,7 @@ impl Retryable for AzureErrorWrapper {
         match self.inner.kind() {
             ErrorKind::HttpResponse { status, .. } => !matches!(
                 status,
-                StatusCode::NotFound
-                    | StatusCode::BadRequest
-                    | StatusCode::Forbidden
+                StatusCode::NotFound | StatusCode::BadRequest | StatusCode::Forbidden
             ),
             ErrorKind::Io => true,
             // IMDS / token fetch failed: retry after clear_cache (Thanos / azidentity).

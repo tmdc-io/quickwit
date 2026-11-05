@@ -109,6 +109,9 @@ pub struct IndexingService {
     pub(crate) storage_resolver: StorageResolver,
     indexing_pipelines: HashMap<PipelineUid, BoxedPipelineHandle>,
     latest_indexing_plan_id: IndexingPlanId,
+    /// Last plan successfully applied (spawn/shutdown). Used to periodically retry shard
+    /// assignment when a prior `assign_shards` did not reach a pipeline source.
+    last_applied_indexing_plan: Option<ApplyIndexingPlanRequest>,
     counters: IndexingServiceCounters,
     pub(crate) max_concurrent_split_uploads: usize,
     merge_scheduler_service_opt: Option<Mailbox<MergeSchedulerService>>,
@@ -179,6 +182,7 @@ impl IndexingService {
             split_cache,
             indexing_pipelines: Default::default(),
             latest_indexing_plan_id: String::new(),
+            last_applied_indexing_plan: None,
             counters: Default::default(),
             max_concurrent_split_uploads: indexer_config.max_concurrent_split_uploads,
             #[cfg(feature = "metrics")]
@@ -653,6 +657,10 @@ impl IndexingService {
                 .retain(|_, handle| handle.handle.state().is_running());
         }
 
+        if let Some(last_plan) = self.last_applied_indexing_plan.clone() {
+            self.assign_shards_to_pipelines(&last_plan).await;
+        }
+
         self.update_chitchat_running_plan().await;
 
         let pipeline_metrics: HashMap<&IndexingPipelineId, PipelineMetrics> = self
@@ -821,6 +829,10 @@ impl IndexingService {
             return Ok(());
         }
         if plan_request.indexing_plan_id == self.latest_indexing_plan_id {
+            // The control plane (or a retried RPC) may resend the same plan. Re-run shard
+            // assignment: it is idempotent when shard sets are unchanged, and it heals pipelines
+            // that missed the first assignment (e.g. source mailbox was closed).
+            self.assign_shards_to_pipelines(&plan_request).await;
             return Ok(());
         }
         self.latest_indexing_plan_id = plan_request.indexing_plan_id.clone();
@@ -846,6 +858,7 @@ impl IndexingService {
                 format!("failed to spawn indexing pipelines: {spawn_pipeline_failures:?}");
             return Err(IndexingError::Internal(message));
         }
+        self.last_applied_indexing_plan = Some(plan_request);
         Ok(())
     }
 
@@ -1826,6 +1839,90 @@ mod tests {
                 indexing_tasks: vec![task(0)],
                 indexing_plan_id: "01ARZ3NDEKTSV4RRFFQ69G5F60".to_string(),
             })
+            .await
+            .unwrap();
+        assert_eq!(
+            indexing_service_handle
+                .observe()
+                .await
+                .num_running_pipelines,
+            1
+        );
+
+        indexing_service_handle.quit().await;
+        universe.assert_quit().await;
+    }
+
+    #[tokio::test]
+    async fn test_indexing_service_reapplies_shard_assignment_on_duplicate_plan_id() {
+        quickwit_common::setup_logging_for_tests();
+        let transport = ChitchatTransport::default();
+        let cluster = create_cluster_for_test(Vec::new(), &["indexer"], &transport, true)
+            .await
+            .unwrap();
+        let metastore = metastore_for_test();
+
+        let index_id = append_random_suffix("test-duplicate-plan");
+        let index_uri = format!("ram:///indexes/{index_id}");
+        let index_config = IndexConfig::for_test(&index_id, &index_uri);
+        let create_index_request =
+            CreateIndexRequest::try_from_index_config(&index_config).unwrap();
+        let index_uid: IndexUid = metastore
+            .create_index(create_index_request)
+            .await
+            .unwrap()
+            .index_uid()
+            .clone();
+
+        let source_config = SourceConfig {
+            source_id: "test-duplicate-plan--source".to_string(),
+            num_pipelines: NonZeroUsize::MIN,
+            enabled: true,
+            source_params: SourceParams::void(),
+            transform_config: None,
+            input_format: SourceInputFormat::Json,
+        };
+        let add_source_request =
+            AddSourceRequest::try_from_source_config(index_uid.clone(), &source_config).unwrap();
+        metastore.add_source(add_source_request).await.unwrap();
+
+        let universe = Universe::new();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (indexing_service, indexing_service_handle) = spawn_indexing_service_for_test(
+            temp_dir.path(),
+            &universe,
+            metastore.clone(),
+            cluster.clone(),
+        )
+        .await;
+
+        let params_fingerprint =
+            indexing_pipeline_params_fingerprint(&index_config, &source_config);
+        let plan_request = ApplyIndexingPlanRequest {
+            indexing_tasks: vec![IndexingTask {
+                index_uid: Some(index_uid.clone()),
+                source_id: source_config.source_id.clone(),
+                shard_ids: Vec::new(),
+                pipeline_uid: Some(PipelineUid::for_test(0u128)),
+                params_fingerprint,
+            }],
+            indexing_plan_id: "01ARZ3NDEKTSV4RRFFQ69G5F70".to_string(),
+        };
+
+        indexing_service
+            .ask_for_res(plan_request.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            indexing_service_handle
+                .observe()
+                .await
+                .num_running_pipelines,
+            1
+        );
+
+        indexing_service
+            .ask_for_res(plan_request.clone())
             .await
             .unwrap();
         assert_eq!(
