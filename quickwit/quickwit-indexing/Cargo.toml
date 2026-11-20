@@ -25,7 +25,6 @@ fnv = { workspace = true }
 futures = { workspace = true }
 google-cloud-auth = { workspace = true, optional = true }
 google-cloud-gax = { workspace = true, optional = true }
-google-cloud-googleapis = { workspace = true, optional = true }
 google-cloud-pubsub = { workspace = true, optional = true }
 itertools = { workspace = true }
 libz-sys = { workspace = true, optional = true }
@@ -72,7 +71,6 @@ quickwit-storage = { workspace = true }
 gcp-pubsub = [
   "dep:google-cloud-auth",
   "dep:google-cloud-gax",
-  "dep:google-cloud-googleapis",
   "dep:google-cloud-pubsub",
 ]
 gcp-pubsub-emulator-tests = []

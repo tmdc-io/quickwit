@@ -1,4 +1,4 @@
-FROM ubuntu:noble@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 AS builder
+FROM ubuntu:noble@sha256:9c7f200c07e3d4a03e7249d2c16bf66a51120fb876aa2242cf31451412543289 AS builder
 
 RUN apt-get update \
     && apt-get -y upgrade \
@@ -7,7 +7,7 @@ RUN apt-get update \
 RUN curl -L https://raw.githubusercontent.com/quickwit-oss/quickwit/main/install.sh | sh
 
 
-FROM ubuntu:noble@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 AS quickwit
+FROM ubuntu:noble@sha256:9c7f200c07e3d4a03e7249d2c16bf66a51120fb876aa2242cf31451412543289 AS quickwit
 
 LABEL org.opencontainers.image.title="Quickwit"
 LABEL maintainer="Quickwit, Inc. <hello@quickwit.io>"
