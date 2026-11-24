@@ -9,7 +9,7 @@ on:
 jobs:
   dev-release:
     name: Build and Push Quickwit Docker image to Docker Hub
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Cleanup Disk Space
         run: |

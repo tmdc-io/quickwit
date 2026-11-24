@@ -69,5 +69,5 @@ pub async fn get_aws_config() -> &'static aws_config::SdkConfig {
 
 /// Returns the AWS behavior version.
 pub fn aws_behavior_version() -> BehaviorVersion {
-    BehaviorVersion::v2026_11_10()
+    BehaviorVersion::v2026_11_17()
 }
