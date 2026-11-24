@@ -87,7 +87,7 @@ jobs:
         run: yarn --cwd quickwit-ui install
         working-directory: ./quickwit
       - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps --only-shell
+        run: npx playwright install chromium --with-deps
         working-directory: ./quickwit/quickwit-ui
       - name: Build UI
         run: CI=false yarn --cwd quickwit-ui build
