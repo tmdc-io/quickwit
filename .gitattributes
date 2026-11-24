@@ -1,1 +1,6 @@
 **/codegen/** linguist-generated
+
+# Omitted from `git archive` (e.g. Wiz `scan dir --ignore-local-changes`): examples only.
+distribution/ecs/** export-ignore
+build/cross-images/** export-ignore
+docs/assets/sqs-file-source.tf export-ignore

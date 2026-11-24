@@ -1,0 +1,22 @@
+# Wiz `scan dir` path exclusions for tmdcio/quickwit.
+# Reduces false positives that are not shipped in production images/binaries.
+# Does not affect container-image scans (trivy/grype/wiz-image).
+
+# Local Rust build output (e.g. libp256-* secret hits in target/debug/deps)
+**/target/
+
+# Fixed TLS material for tests only
+quickwit/resources/tests/tls/
+
+# Example / reference Terraform and ECS layouts (not TMDC production deploy)
+distribution/ecs/
+docs/assets/sqs-file-source.tf
+
+# Cross-compilation Dockerfiles (build tooling; release image is repo-root Dockerfile)
+build/cross-images/
+
+# Local vulnerability scan reports
+.cache/wiz-scan/
+
+# Copied GitHub Actions workflows inside dependencies (IaC noise; keep node_modules for SCA)
+**/node_modules/**/.github/

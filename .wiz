@@ -1,0 +1,13 @@
+# Wiz CLI configuration for local/CI dir scans (wizcli scan dir).
+# Suppresses known false positives; dependency CVEs are fixed via Cargo/yarn, not here.
+
+ignore:
+  secrets:
+    # PKCS private key in committed test fixtures (not production).
+    SECRET-SYSTEM-22:
+      quickwit/resources/tests/tls/ca.key:
+        reason: TEST_FIXTURE
+      quickwit/resources/tests/tls/server.key:
+        reason: TEST_FIXTURE
+      quickwit/resources/tests/tls/server2.key:
+        reason: TEST_FIXTURE
