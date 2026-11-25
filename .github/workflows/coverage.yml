@@ -181,7 +181,7 @@ jobs:
     if: ${{ github.repository_owner == 'quickwit-oss' && failure() }}
     name: On Failure
     needs: [test]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Send Message
         uses: sarisia/actions-status-discord@eb045afee445dc055c18d3d90bd0f244fd062708 # v1.16.0

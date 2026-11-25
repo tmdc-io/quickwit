@@ -29,7 +29,7 @@ concurrency:
 jobs:
   tests:
     name: Unit tests
-    runs-on: "ubuntu-latest"
+    runs-on: "ubuntu-24.04"
     timeout-minutes: 60
     permissions:
       contents: read
@@ -126,7 +126,7 @@ jobs:
 
   lints:
     name: Lints
-    runs-on: "ubuntu-latest"
+    runs-on: "ubuntu-24.04"
     timeout-minutes: 60
     permissions:
       contents: read
@@ -214,7 +214,7 @@ jobs:
 
   thirdparty-license:
     name: Check Datadog third-party license file
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       actions: write

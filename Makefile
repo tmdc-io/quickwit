@@ -139,9 +139,13 @@ push-tmdc-docker: ## Push TMDC Quickwit Docker image to Docker Hub.
 	docker push $(TMDC_IMAGE):$(GITHUB_TAGS)
 
 # Vulnerability scan (wiz + trivy + grype). Set GITHUB_TAGS to the local image tag.
+# Dir scan: commit .wiz / .wizignore; optional WIZ_CARGO_CLEAN=1 removes quickwit/target first.
 WIZ_SCAN_SCRIPT ?= $(HOME)/wiz-scan.sh
+WIZ_CARGO_CLEAN ?= 0
 .PHONY: scan-vulnerabilities
 scan-vulnerabilities: ## Scan repo dir and $(TMDC_IMAGE):$(GITHUB_TAGS) for CVEs.
 	@test -n "$(GITHUB_TAGS)" || (echo "GITHUB_TAGS is required" && exit 1)
 	@test -x "$(WIZ_SCAN_SCRIPT)" || (echo "WIZ_SCAN_SCRIPT not found: $(WIZ_SCAN_SCRIPT)" && exit 1)
+	@if [ "$(WIZ_CARGO_CLEAN)" = "1" ]; then cargo clean --manifest-path quickwit/Cargo.toml; fi
+	@if [ -d quickwit/target ]; then echo "warning: quickwit/target present; WIZ_CARGO_CLEAN=1 or 'cargo clean' reduces false secret hits" >&2; fi
 	$(WIZ_SCAN_SCRIPT) --ignore-local-changes --scanners dir,trivy,grype $(TMDC_IMAGE):$(GITHUB_TAGS)

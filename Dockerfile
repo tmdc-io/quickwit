@@ -1,5 +1,5 @@
 # Base image digests: run `make update-docker-base-digests` before release builds.
-FROM node:24@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413 AS ui-builder
+FROM node:24@sha256:6b33b0be1647d1a577f9cebb6c8fc2587cc02c98c9956af8d0289df1791a3d10 AS ui-builder
 
 COPY quickwit/quickwit-ui /quickwit/quickwit-ui
 
@@ -9,7 +9,7 @@ RUN touch .gitignore_for_build_directory \
     && NODE_ENV=production make install build
 
 
-FROM rust:bookworm@sha256:9181b56c2a21ab1d5e73cffe04fc762426d30aa7fac3c91141dd033f49a7fc8b AS bin-builder
+FROM rust:bookworm@sha256:1b9dc70890ec494e466c87f5ad41ad544bfb30ea6acc99a3e068c47a4ae3f23e AS bin-builder
 
 ARG CARGO_FEATURES=release-feature-set
 ARG CARGO_PROFILE=release
@@ -54,7 +54,7 @@ RUN echo "Building workspace with feature(s) '$CARGO_FEATURES' and profile '$CAR
     && find target/$CARGO_PROFILE -maxdepth 1 -perm /a+x -type f -exec mv {} /quickwit/bin \;
 
 
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS quickwit
+FROM debian:bookworm-slim@sha256:e67eeead736ff7bbe258ef088bff683635c561b1fcfefad0806c1df4ab49ce0e AS quickwit
 
 LABEL org.opencontainers.image.title="Quickwit"
 LABEL maintainer="Quickwit, Inc. <hello@quickwit.io>"

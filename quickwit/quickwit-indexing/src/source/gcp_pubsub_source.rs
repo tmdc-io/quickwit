@@ -18,10 +18,10 @@ use std::{fmt, mem};
 use anyhow::Context;
 use async_trait::async_trait;
 use bytes::Bytes;
-use google_cloud_auth::credentials::CredentialsFile;
-use google_cloud_gax::retry::RetrySetting;
-use google_cloud_pubsub::client::{Client, ClientConfig};
-use google_cloud_pubsub::subscription::Subscription;
+use futures::{FutureExt, StreamExt};
+use google_cloud_auth::credentials::{Credentials, service_account};
+use google_cloud_pubsub::client::{Subscriber, SubscriptionAdmin};
+use google_cloud_pubsub::subscriber::MessageStream;
 use quickwit_actors::ActorExitStatus;
 use quickwit_common::rand::append_random_suffix;
 use quickwit_config::PubSubSourceParams;
@@ -29,6 +29,7 @@ use quickwit_metastore::checkpoint::{PartitionId, SourceCheckpoint};
 use quickwit_proto::metastore::SourceType;
 use quickwit_proto::types::Position;
 use serde_json::{Value as JsonValue, json};
+use tokio::sync::Mutex;
 use tokio::time;
 use tracing::{debug, info, warn};
 
@@ -71,7 +72,8 @@ pub struct GcpPubSubSourceState {
 pub struct GcpPubSubSource {
     source_runtime: SourceRuntime,
     subscription_name: String,
-    subscription: Subscription,
+    subscription_fqsn: String,
+    message_stream: Mutex<MessageStream>,
     state: GcpPubSubSourceState,
     backfill_mode_enabled: bool,
     partition_id: PartitionId,
@@ -84,8 +86,51 @@ impl fmt::Debug for GcpPubSubSource {
             .debug_struct("GcpPubSubSource")
             .field("index_id", &self.source_runtime.index_id())
             .field("source_id", &self.source_runtime.source_id())
-            .field("subscription", &self.subscription)
+            .field("subscription", &self.subscription_fqsn)
             .finish()
+    }
+}
+
+fn fully_qualified_subscription_name(subscription: &str, project_id: Option<&str>) -> String {
+    if subscription.starts_with("projects/") {
+        subscription.to_string()
+    } else if let Some(project_id) = project_id {
+        format!("projects/{project_id}/subscriptions/{subscription}")
+    } else {
+        subscription.to_string()
+    }
+}
+
+async fn load_credentials(credentials_file: &str) -> anyhow::Result<Credentials> {
+    let contents = tokio::fs::read_to_string(credentials_file)
+        .await
+        .with_context(|| format!("failed to read GCP credentials file `{credentials_file}`"))?;
+    let json: serde_json::Value = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse GCP credentials file `{credentials_file}`"))?;
+    service_account::Builder::new(json)
+        .build()
+        .context("failed to build GCP credentials from service account key")
+}
+
+fn build_pubsub_clients(
+    credentials: Option<Credentials>,
+) -> impl std::future::Future<Output = anyhow::Result<(Subscriber, SubscriptionAdmin)>> {
+    async move {
+        let mut subscriber_builder = Subscriber::builder();
+        let mut admin_builder = SubscriptionAdmin::builder();
+        if let Some(credentials) = credentials {
+            subscriber_builder = subscriber_builder.with_credentials(credentials.clone());
+            admin_builder = admin_builder.with_credentials(credentials);
+        }
+        let subscriber = subscriber_builder
+            .build()
+            .await
+            .context("failed to create GCP PubSub subscriber client")?;
+        let admin = admin_builder
+            .build()
+            .await
+            .context("failed to create GCP PubSub subscription admin client")?;
+        Ok((subscriber, admin))
     }
 }
 
@@ -100,29 +145,29 @@ impl GcpPubSubSource {
             .max_messages_per_pull
             .unwrap_or(DEFAULT_MAX_MESSAGES_PER_PULL);
 
-        let mut client_config: ClientConfig = match source_params.credentials_file {
-            Some(credentials_file) => {
-                let credentials = CredentialsFile::new_from_file(credentials_file.clone())
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "failed to load GCP PubSub credentials file from `{credentials_file}`"
-                        )
-                    })?;
-                ClientConfig::default().with_credentials(credentials).await
-            }
-            _ => ClientConfig::default().with_auth().await,
-        }
-        .context("failed to create GCP PubSub client config")?;
+        let credentials = match source_params.credentials_file {
+            Some(credentials_file) => Some(load_credentials(&credentials_file).await?),
+            None => None,
+        };
 
-        if source_params.project_id.is_some() {
-            client_config.project_id = source_params.project_id
-        }
+        let (subscriber, admin) = build_pubsub_clients(credentials).await?;
 
-        let client = Client::new(client_config)
+        let subscription_fqsn = fully_qualified_subscription_name(
+            &subscription_name,
+            source_params.project_id.as_deref(),
+        );
+
+        admin
+            .get_subscription()
+            .set_subscription(subscription_fqsn.clone())
+            .send()
             .await
-            .context("failed to create GCP PubSub client")?;
-        let subscription = client.subscription(&subscription_name);
+            .context(format!(
+                "GCP PubSub subscription `{subscription_fqsn}` does not exist or is unreachable"
+            ))?;
+
+        let message_stream = subscriber.subscribe(subscription_fqsn.clone()).build();
+
         // TODO: replace with "<node_id>/<index_id>/<source_id>/<pipeline_ord>"
         let partition_id = append_random_suffix(&format!("gpc-pubsub-{subscription_name}"));
         let partition_id = PartitionId::from(partition_id);
@@ -130,17 +175,15 @@ impl GcpPubSubSource {
         info!(
             index_id=%source_runtime.index_id(),
             source_id=%source_runtime.source_id(),
-            subscription=%subscription_name,
+            subscription=%subscription_fqsn,
             max_messages_per_pull=%max_messages_per_pull,
             "starting GCP PubSub source"
         );
-        if !subscription.exists(Some(RetrySetting::default())).await? {
-            anyhow::bail!("GCP PubSub subscription `{subscription_name}` does not exist");
-        }
         Ok(Self {
             source_runtime,
             subscription_name,
-            subscription,
+            subscription_fqsn,
+            message_stream: Mutex::new(message_stream),
             state: GcpPubSubSourceState::default(),
             backfill_mode_enabled,
             partition_id,
@@ -170,7 +213,7 @@ impl Source for GcpPubSubSource {
             tokio::select! {
                 resp = self.pull_message_batch(&mut batch_builder) => {
                     if let Err(err) = resp {
-                        warn!("failed to pull messages from subscription `{}`: {:?}", self.subscription_name, err);
+                        warn!("failed to pull messages from subscription `{}`: {:?}", self.subscription_fqsn, err);
                     }
                     if batch_builder.num_bytes >= BATCH_NUM_BYTES_LIMIT {
                         break;
@@ -191,7 +234,7 @@ impl Source for GcpPubSubSource {
 
         // TODO: need to wait for all the id to be ack for at_least_once
         if self.should_exit() {
-            info!(subscription=%self.subscription_name, "reached end of subscription");
+            info!(subscription=%self.subscription_fqsn, "reached end of subscription");
             source_sink.send_exit_with_success(ctx).await?;
             return Err(ActorExitStatus::Success);
         }
@@ -235,28 +278,33 @@ impl Source for GcpPubSubSource {
 
 impl GcpPubSubSource {
     async fn pull_message_batch(&mut self, batch: &mut BatchBuilder) -> anyhow::Result<()> {
-        let messages = self
-            .subscription
-            .pull(self.max_messages_per_pull, None)
-            .await
-            .context("failed to pull messages from subscription")?;
+        let mut stream = self.message_stream.lock().await;
+        let mut pulled_messages = Vec::new();
 
-        let Some(last_message) = messages.last() else {
+        while pulled_messages.len() < self.max_messages_per_pull as usize {
+            let next_message = stream.next();
+            let Some(result) = next_message.now_or_never().flatten() else {
+                break;
+            };
+            let (message, handler) = result.context("failed to pull messages from subscription")?;
+            handler.ack();
+            pulled_messages.push(message);
+        }
+
+        let Some(last_message) = pulled_messages.last() else {
             return Ok(());
         };
-        let message_id = last_message.message.message_id.clone();
+        let message_id = last_message.message_id.clone();
         let publish_timestamp_millis = last_message
-            .message
             .publish_time
             .as_ref()
-            .map(|timestamp| timestamp.seconds * 1_000 + (timestamp.nanos as i64 / 1_000_000))
-            .unwrap_or(0); // TODO: Replace with now UTC millis.
+            .map(|timestamp| timestamp.seconds() * 1_000 + (timestamp.nanos() as i64 / 1_000_000))
+            .unwrap_or(0);
 
-        for message in messages {
-            message.ack().await?; // TODO: remove ACK here when doing at least once
+        for message in pulled_messages {
             self.state.num_messages_processed += 1;
-            self.state.num_bytes_processed += message.message.data.len() as u64;
-            let doc: Bytes = Bytes::from(message.message.data);
+            self.state.num_bytes_processed += message.data.len() as u64;
+            let doc: Bytes = message.data;
             if doc.is_empty() {
                 self.state.num_invalid_messages += 1;
             } else {
@@ -284,9 +332,8 @@ mod gcp_pubsub_emulator_tests {
     use std::env::var;
     use std::num::NonZeroUsize;
 
-    use google_cloud_googleapis::pubsub::v1::PubsubMessage;
-    use google_cloud_pubsub::publisher::Publisher;
-    use google_cloud_pubsub::subscription::SubscriptionConfig;
+    use google_cloud_pubsub::client::{Publisher, SubscriptionAdmin, TopicAdmin};
+    use google_cloud_pubsub::model::Message;
     use quickwit_actors::Universe;
     use quickwit_config::{SourceConfig, SourceInputFormat, SourceParams};
     use quickwit_proto::types::{IndexId, IndexUid};
@@ -323,21 +370,26 @@ mod gcp_pubsub_emulator_tests {
     }
 
     async fn create_topic_and_subscription(topic: &str, subscription: &str) -> Publisher {
-        let client_config = google_cloud_pubsub::client::ClientConfig {
-            project_id: Some(GCP_TEST_PROJECT.to_string()),
-            ..Default::default()
-        };
-        let client = Client::new(client_config.with_auth().await.unwrap())
-            .await
-            .unwrap();
-        let subscription_config = SubscriptionConfig::default();
+        let topic_admin = TopicAdmin::builder().build().await.unwrap();
+        let subscription_admin = SubscriptionAdmin::builder().build().await.unwrap();
 
-        let created_topic = client.create_topic(topic, None, None).await.unwrap();
-        client
-            .create_subscription(subscription, topic, subscription_config, None)
+        let topic_name = format!("projects/{GCP_TEST_PROJECT}/topics/{topic}");
+        let subscription_name = format!("projects/{GCP_TEST_PROJECT}/subscriptions/{subscription}");
+
+        topic_admin
+            .create_topic()
+            .set_name(topic_name.clone())
+            .send()
             .await
             .unwrap();
-        created_topic.new_publisher(None)
+        subscription_admin
+            .create_subscription()
+            .set_name(subscription_name)
+            .set_topic(topic_name.clone())
+            .send()
+            .await
+            .unwrap();
+        Publisher::builder(topic_name).build().await.unwrap()
     }
 
     #[tokio::test]
@@ -375,17 +427,11 @@ mod gcp_pubsub_emulator_tests {
         let index_id: IndexId = append_random_suffix("test-gcp-pubsub-source--index");
         let index_uid = IndexUid::new_with_random_ulid(&index_id);
 
-        let mut pubsub_messages = Vec::with_capacity(6);
         for i in 0..6 {
-            let pubsub_message = PubsubMessage {
-                data: format!("Message {i}").into(),
-                ..Default::default()
-            };
-            pubsub_messages.push(pubsub_message);
-        }
-        let awaiters = publisher.publish_bulk(pubsub_messages).await;
-        for awaiter in awaiters {
-            awaiter.get().await.unwrap();
+            publisher
+                .publish(Message::new().set_data(format!("Message {i}")))
+                .await
+                .unwrap();
         }
         let source_runtime = SourceRuntimeBuilder::new(index_uid, source_config).build();
         let source = source_loader.load_source(source_runtime).await.unwrap();
